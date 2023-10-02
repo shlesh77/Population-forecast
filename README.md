@@ -1,6 +1,6 @@
 # Population-forecast
 Population forecast 
-**This is a r markdown steps:**
+**STEPS:**
 1. Set up global knitr chunk to control code display options
 2. Load the necessary packages to perform the modeling
 3. Import the original data as 'popdata'
