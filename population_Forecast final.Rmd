@@ -1,0 +1,787 @@
+---
+title: "Population forecast"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+date:  "`r format(Sys.Date(), '%B %d, %Y')`"
+author: "Bijay Paudyal, Economist Intern and 
+Shawn Stoddard, Senior Resource Economist"
+---
+
+<style>
+body {
+  font-size: 14px;
+}
+
+
+
+```{r setup, results="hide"}
+### Setting up global knitr chunk to control code display options
+knitr::opts_chunk$set(
+          echo = FALSE,
+          error=TRUE,
+          eval=TRUE,
+          warning = FALSE,
+          results = "hide"
+          )
+
+```
+
+
+
+```{r echo=FALSE, warning=FALSE, results="hide"}
+### Loading the necessary packages to perform the modeling 
+
+library(haven)  # to import data from various statistical packags - here from stata
+library(tidyverse) # to visualize, manipulate and analyze the data
+library(nls2)   #to run non linear regression
+library(janitor)
+library(knitr)  # to create tables 
+library(readxl) # to read xlsx file 
+library(tsibble) #manage and analyze time series data 
+library(forecast) #to forecast and predict
+library(tidyr) #to tidy and reshape the data
+library(dplyr) # to filter, arrange and summarize the data
+library(zoo)   # to apply moving average smoothing technique
+library(writexl) #to export data file to excel file
+```
+
+
+
+
+```{r echo=FALSE, results="hide"}
+#Cleaning up the previous work space
+rm(list=ls())
+```
+
+
+Defining the data path to load the data 
+```{r}
+dpath <- "S:/2023/BPaudyal/Population/Work/Data/"
+gpath <- "Graphs/"
+xpath<- "S:/2023/BPaudyal/Population/Work/Excel/"
+```
+
+
+Importing the original data as 'popdata'
+```{r}
+popdata <- read_dta(paste0(dpath, "PopulationData.dta")) %>%
+                    mutate(across(everything(), tolower)) %>%
+                    select(year, washoe) %>%
+                    filter(year >= 1950) %>%
+                    arrange(year) %>%
+                    mutate(t = row_number(), .after=year) %>% 
+                    mutate(washoe = structure(washoe, 
+                                label = "Actual Population"))
+```
+
+
+
+```{r echo=F, results="hide"}
+#Checking the data type of each variable
+head(popdata)
+
+
+```
+
+
+
+```{r echo=F, results="hide"}
+### changing the data structure of year and washoe from character to numeric
+popdata<-popdata %>% 
+             mutate(
+                year=as.numeric(year),
+                washoe= as.numeric(washoe)
+                    )
+
+
+  
+```
+
+</style>
+
+### General overview of the data
+The following table shows the first and last five year data of our data-set.
+
+
+```{r echo=F, results='asis'}
+### The first and last five year population data
+poptab<-bind_rows(head(popdata,5),tail(popdata,5))
+
+poptab %>%
+    kable(caption = "Table 1: First and Last five years of Washoe Population Data", 
+          col.names = c('Year', 'Time Index', 'Population'), 
+          format = 'pipe', linesep = '',
+          booktabs = TRUE,
+          align = 'c'
+  )
+
+
+```
+
+
+
+
+
+```{r echo=F}
+### generating variable 't' and labeling it 
+popdata <- popdata %>% 
+              mutate(t = 1:nrow(popdata)) %>% 
+              mutate(t = structure(t, 
+                              label = "Time index - Logistic Curve"))
+```
+
+
+
+
+### Building the Population Model  
+
+The population model is a Keyfitz three parameter logistics curve given by: \n
+
+$$ Population = \frac{a}{1 + b * exp(-ct)}  $$\n 
+
+Here, **a** is the population ceiling or carrying capacity. It's the value that the population approaches as time goes on. \n  
+ 
+**b** is the relative growth rate given by: $$\frac{(a-a_0)}{a_0} $$  where $a_0$ is the initial population size at time $t=0$ \n  
+
+and **c** is the intrinsic growth rate. It influences how quickly the growth rate slows down as the population approaches the carrying capacity. Larger values of `c` result in faster convergence to the carrying capacity.
+
+The population data is extended to the year 2100 and assigned time indices, thus preparing the data for modeling. 
+
+```{r echo=FALSE}
+lrow <- tail(popdata$year, n = 1)
+popdata <- popdata %>%
+              mutate(year = ifelse(
+                    year<=lrow,year, year+1:(2100 -lrow))) %>% 
+                     #year <= 2022, year, year + 1:(2100 - 2022))) %>% 
+              complete(year = seq(1950, 2100)) %>% 
+              mutate(t = row_number())
+
+```
+
+
+
+
+```{r echo=F}
+### Fitting the nonlinear regression model using nls()
+#The model parameters a, b, and c are estimated using the data. The fitted model is stored in model1.
+#The nls2 function is used to fit a logistic curve model to the population data
+model1 <- nls2(washoe ~   (a / (1 + b * exp(-c * t))), 
+                          data = popdata,
+                          start = list(a = 650000, 
+                          b = 5.0, 
+                          c = 0.5)
+                          )
+
+# Storing the regression results in a matrix
+lc_model_1 <- as.matrix(summary(model1)$coefficients)
+
+
+#predicting model_1 
+popdata<-popdata %>% 
+            mutate(model_1=predict(model1, 
+                                   newdata = popdata)) %>% 
+            mutate(model_1=round(model_1)) %>% 
+            mutate(model_1=structure(model_1,
+                            label="Model 1: Base population Logistic Curve"))
+```
+
+
+
+### Plotting the model
+The nls2 function is used to fit a logistic curve model to the population data.
+The model parameters a, b, and c are estimated using the data. A time series plot comparing the actual population data to the predictions made by Model 1. Blue curve represents actual population data and red curve shows Model 1 predictions till 2030.
+
+```{r echo=F, warning=FALSE}
+
+popdata %>%
+      filter(year >= 1940 & year <= 2030) %>%
+        ggplot( aes(x = year)) +
+                geom_line(aes(y = washoe, color="Actual"), 
+                          linetype = "solid", 
+                          linewidth = 1) +
+                geom_line(aes(y = model_1, color="Model 1"), 
+                          linetype = "solid", 
+                          linewidth = 1) +
+                scale_x_continuous(breaks = seq(min(popdata$year), 
+                                                max(popdata$year), 
+                                                by = 10)) +
+                scale_y_continuous(limits = c(0, 650000), 
+                                   breaks = seq(0, 650000, by = 50000), 
+                                   labels = function(x) x / 1000) +
+                labs(x = "Year", y = "Population (in thousands)", 
+                     title = "Figure 1: Time Series Plot: Actual vs Predicted to 2030") +
+                scale_color_manual(name = "Population", 
+                                   values = c("blue", "red"),
+                                   labels = c("Actual", "Predicted Model 1")) +
+                guides(linetype = guide_legend(title = "Line Type"),
+                linewidth = guide_legend(title = "Line Width"))+
+                theme(panel.background = element_rect(fill = "white"),
+                            plot.title = element_text(hjust = 0.5),
+                            legend.position = c(1, 0.2),  
+                            legend.justification = c(1, 0),
+                            legend.box.just = "right",
+                            plot.margin = margin(10, 10, 10, 50, "pt"))
+```
+
+### Extending the curve to 2100
+Furthermore, extending the predictions to 2100, we get the following curve.
+
+```{r}
+
+ggplot(data = popdata, aes(x = year)) +
+       geom_line(aes(y = washoe, color="Actual"), 
+                 linetype = "solid", 
+                 linewidth = 1) +
+       geom_line(aes(y = model_1, color="Model 1"), 
+                 linetype = "solid", 
+                 linewidth = 1) +
+       scale_x_continuous(breaks = seq(min(popdata$year), 
+                                       max(popdata$year), 
+                                       by = 25)) +
+        scale_y_continuous(limits = c(0, 650000),
+                           breaks = seq(0, 650000,by = 50000), 
+                           labels = function(x) x / 1000) +
+        labs(x = "Year", y = "Population (in thousands)", 
+             title = "Figure 2: Time Series Plot: Actual vs Predicted to 2100") +
+        scale_color_manual(name = "Population", 
+                           values = c("blue", "red"),
+                           labels = c("Actual", "Predicted Model 1")) +
+       guides(linetype = guide_legend(title = "Line Type"),
+                linewidth = guide_legend(title = "Line Width"))+
+       theme(panel.background = element_rect(fill = "white"),
+                       plot.title = element_text(hjust = 0.5),
+                                legend.position = c(1, 0.2),  
+                                legend.justification = c(1, 0),
+                                legend.box.just = "right",
+                                plot.margin = margin(10, 10, 10, 50, "pt"))
+
+  
+```
+
+
+
+```{r}
+### Model 2: Estimating the first iteration of calibrated Logistic Curve model
+
+start_a <- lc_model_1[1, 1]
+
+model2 <- nls2(washoe ~   (start_a / (1 + b * exp(-c * t))) , 
+              data = popdata,
+              start = list( b = 5.0, c = 0.5),
+              algorithm="plinear"
+              )
+# Storing the model results in a matrix
+lc_model_2 <- as.matrix(summary(model2)$coefficients)
+
+b<-lc_model_2[2, 1]
+c<-lc_model_2[3, 1]
+```
+
+
+
+
+```{r}
+### Checking the last row of population data 
+lrow<-tail(which(!is.na(popdata$washoe)),1)
+cat( "Last row of population data is:", lrow)
+```
+
+
+
+
+```{r}
+
+popdata2<-popdata %>% 
+      mutate(model_2=predict(model2,newdata=popdata)) %>% 
+      round() %>%  
+      mutate(model_2=structure(model_2,label="Population Logistic Model 2"))
+```
+
+
+### Model 2: 
+Based on the results of Model 1, model parameters (b and c) are adjusted to improve the fit of Model 2. An iterative process is used to find the optimal population ceiling.
+
+```{r}
+calib<-popdata2$washoe[lrow]-popdata2$model_2[lrow]
+cat("the new calibration value is", calib,"\n")
+
+new_a<-round(start_a + calib)             
+cat("the new start value is", new_a)
+```
+
+
+
+```{r}
+
+# Selecting data where washoe is not NA for regression
+popdata_filtered <- popdata2 %>%
+                        filter(!is.na(washoe))
+
+ lrow <- nrow(popdata_filtered)
+calib <- popdata_filtered$washoe[lrow] - popdata_filtered$model_2[lrow]
+    i <- 1
+ conv <- 1
+ 
+while (TRUE) {
+  if (1 > calib) {
+    break
+  }
+  
+  model2 <- nls2(washoe ~ new_a / (1 + b * exp(-c * t)),
+                data = popdata_filtered,
+                start = list(b = 5.0, c = 0.5),
+                algorithm = "port",
+                lower = c(a = 0, b = 0, c = 0),
+                upper = c(a = Inf, b = Inf, c = Inf))
+  
+  popdata_filtered$model_2 <- predict(model2)
+  
+  calib <- popdata_filtered$washoe[lrow] - popdata_filtered$model_2[lrow]
+  new_a <- new_a + calib
+  
+  if (abs(calib) <= conv) {
+          break
+    }
+  
+  if (i %% 5 == 0) {
+          cat("=================================\n")
+          cat("Iteration Number", i, "\n")
+          cat("Model 2 prediction", popdata_filtered$model_2[lrow], "\n")
+          cat("Calib:", calib, "\n")
+          cat("new a:", new_a, "\n")
+  }
+  
+      i <- i + 1
+}
+# Model 2: Estimate the first iteration of calibrated LC model
+# Print final values before breaking the loop
+cat("=================================\n")
+cat("Final Iteration Number:", i - 1, "\n")
+cat("Final Model 2 prediction:", popdata_filtered$model_2[lrow], "\n")
+cat("Final Calib:", calib, "\n")
+cat("Final new a:", start_a, "\n")
+
+# Update the model predictions with the rounded values and label
+popdata_filtered<- popdata_filtered %>% 
+                    round() %>% 
+                    mutate(model_2=structure(model_2 , 
+                                          label="Population Logistic Model 2"))
+
+
+
+```
+
+
+
+
+```{r}
+
+# Creating a new column in popdata2 with all NA values
+popdata2 <- popdata2 %>%
+                mutate(new_model_2 = NA)
+
+# Copying the values from popdata_filtered$model_2 to new_model_2 for 
+#corresponding 73 observations
+popdata2 <- popdata2 %>%
+              left_join(popdata_filtered %>% 
+              select(t, model_2), by = "t") %>%
+              mutate(new_model_2 = ifelse(!is.na(model_2.y), 
+                                        model_2.y, 
+                                        new_model_2)) %>%
+              select(-model_2.x, -model_2.y) %>%
+              rename(model_2 = new_model_2)
+
+
+```
+
+
+
+The model 2 is fitted using the parameter values and predicted to 2100 to compare our model with original population and Model 1.
+
+```{r}
+popdata2<-popdata2 %>% 
+              mutate(model_2=predict(model2, 
+                                     newdata = popdata2)) %>% 
+              mutate(model_2=round(model_2)) %>% 
+              mutate(model_2 = structure(model_2, 
+                                  label = "Model 2: Calibrated Logistic Curve"))
+```
+
+
+
+```{r}
+### Plotting original population data and model 1 as well as model 2 in a graph
+
+ggplot(data = popdata2, aes(x = year)) +
+                geom_line(aes(y = washoe, color="Actual"), 
+                              linetype = "solid", 
+                              linewidth = 1) +
+                geom_line(aes(y = model_1, color="Model 1"), 
+                              linetype = "solid", 
+                              linewidth = 1) +
+                geom_line(aes(y = model_2, color="Model 2"), 
+                          linetype = "solid", 
+                          linewidth = 1) +
+        scale_x_continuous(breaks = seq(min(popdata2$year), 
+                                        max(popdata2$year), by = 25)) +
+        scale_y_continuous(limits = c(0, 750000),
+                           breaks = seq(0, 750000, by = 50000), 
+                           labels = function(x) x / 1000) +
+        labs(x = "Year", y = "Population (in thousands)", 
+                title = "Figure 3: Time Series Plot: Actual vs Predicted to 2100") +
+        scale_color_manual(name = "Population", 
+                           values = c("black","red", "blue"),
+                           labels = c("Actual", "Predicted Model 1",
+                                      "Model 2 - predicted after calibration")) +
+       guides(linetype = guide_legend(title = "Line Type"),
+                linewidth = guide_legend(title = "Line Width"))+
+       theme(panel.background = element_rect(fill = "white"),
+                                plot.title = element_text(hjust = 0.5),
+                                legend.position = c(1, 0.2),  
+                                legend.justification = c(1, 0),
+                                legend.box.just = "right",
+                                plot.margin = margin(10, 10, 10, 50, "pt"))
+
+```
+
+
+
+
+```{r}
+#creating variable tr having values from year 2010 to 2027 to evaluate the linear trend of the curve
+popdata2 <- popdata2 %>% 
+                  mutate(tr=ifelse(
+                          #popdata2$year >= 2010 & popdata2$year <= 2027,
+                          popdata2$year >= popdata2$year[lrow-12] & popdata2$year <= (popdata2$year[lrow]+5),
+                          popdata2$year - popdata2$year[lrow-12] + 1, NA)) %>%
+                          #popdata2$year - 2010 + 1, NA)) %>% 
+                  select(t, tr,year, washoe,model_1,model_2)
+
+```
+
+### Model 3
+A short run linear projection of population 'Model 3' is estimated for the 5 year for estimating the logistic curve.
+
+```{r}
+### Run linear regression
+lm_result <- lm(washoe ~ tr, data = popdata2)
+
+```
+
+
+```{r}
+# Predict using the linear model
+popdata_filtered <- popdata2 %>%
+                        select(t, tr, year, washoe) %>%
+                        filter(!is.na(tr)) %>%
+                        mutate(model_3 = predict(lm_result, newdata = .) %>% 
+                        round()) 
+
+
+
+
+```
+
+
+
+
+
+```{r}
+#merging the predicted model_3 to original data
+
+popdata2 <- popdata2 %>%
+              left_join(popdata_filtered %>% 
+              select(t, model_3), by = "t")%>% 
+              mutate(model_3=structure(model_3,
+                                label="Model 3: Short-Run Linear Projection"))
+```
+ 
+
+
+
+```{r}
+# Calculate "calib" and replace values in "model_3"
+
+calib <- popdata2$washoe[lrow] - popdata2$model_3[lrow]
+cat("Calib =", calib, "\n")
+
+popdata2$model_3 <- popdata2$model_3 + calib
+
+```
+
+
+
+```{r}
+### Model 4 (estimated using the Model-3 i.e short run projections)
+
+
+#prepare population data for model 4 and 5 by incorporating the 
+    ##linearly projected data
+
+popdata2<-popdata2 %>% 
+              mutate(washoe2 = ifelse(!is.na(popdata2$washoe), 
+                                      popdata2$washoe, 
+                                      popdata2$model_3)) %>% 
+                      mutate(washoe2=structure(washoe2,
+                                               label="Population Data for models 4 and 5"))
+
+```
+
+
+
+```{r}
+#Regressing new population data to set the new known population to 2700
+
+model4 <- nls2(washoe2 ~ a / (1 + b * exp(-c * t)),
+                 data = popdata2,
+                 start = list(a = 500000, b = 5.0, c = 0.5),
+                 algorithm = "port",
+                 lower = c(a = 0, b = 0, c = 0),
+                 upper = c(a = Inf, b = Inf, c = Inf))
+
+#storing the regression result
+lc_model_4 <- as.matrix(summary(model4)$coefficients)
+
+
+#predicting model_4
+
+popdata2<-popdata2 %>% 
+            mutate(model_4=predict(model4, newdata = popdata2)) %>% 
+            mutate(model_4=round(model_4)) %>% 
+            mutate(model_4=structure(model_4, label="Model_4: Modified Logistic Curve"))
+
+
+```
+
+### Model 4
+Using the prediction of `Model 3` we calibrate the population to base-year of 5 extra years, i.e. 2027 and re predict the population to 2100. 
+
+
+
+```{r}
+# Model 5: calibration of model 4
+
+     i <- 1
+start_a<-lc_model_4[1,1]
+ nlrow <- max(popdata2$t[!is.na(popdata2$washoe2)])
+ 
+cat("last row of population data =", nlrow, "\n")
+     
+```
+
+
+
+```{r}
+### estimating the first iteration of calibrated model 
+
+model5<- nls2(washoe2 ~ start_a / (1 + b * exp(-c * t)),
+                             data = popdata2,
+                             start = list(b = 5.0, c = 0.5),
+                 algorithm = "port",
+                 lower = c(a = 0, b = 0, c = 0),
+                 upper = c(a = Inf, b = Inf, c = Inf))
+
+lc_model_5 <- as.matrix(summary(model5)$coefficients)
+
+
+#predicting model_5 
+popdata2<-popdata2 %>% 
+  mutate(model_5=predict(model5, newdata = popdata2)) %>% 
+        mutate(model_5=round(model_5)) 
+
+
+```
+
+Again the calibration is made to adjust our model to coincide to the current year population after short run prediction i.e. 2027 and projection is made to 2100.
+
+
+
+```{r}
+# Selecting data where washoe is not NA
+popdata_filtered <- popdata2 %>%
+  filter(!is.na(washoe2))
+
+nlrow <- nrow(popdata_filtered)
+
+calib <- popdata_filtered$washoe2[nlrow] - popdata_filtered$model_5[nlrow]
+cat("the new calibration value is", calib,"\n")
+
+new_a<-round(start_a + calib)     
+cat("the new start value is", new_a)
+i <- 1
+conv <- 1
+while (TRUE) {
+  if (1 > calib) {
+    break
+  }
+  
+  model5 <- nls2(washoe2 ~ new_a / (1 + b * exp(-c * t)),
+                data = popdata_filtered,
+                start = list(b = 5.0, c = 0.5),
+                algorithm = "port",
+                lower = c(a = 0, b = 0, c = 0),
+                upper = c(a = Inf, b = Inf, c = Inf))
+  
+  popdata_filtered$model_5 <- predict(model5)
+  
+  calib <- popdata_filtered$washoe2[nlrow] - popdata_filtered$model_5[nlrow]
+  new_a <- new_a + calib
+  
+  if (abs(calib) <= conv) {
+    break
+  }
+  
+  if (i %% 5 == 0) {
+    cat("=================================\n")
+    cat("Iteration Number", i, "\n")
+    cat("Model 5 prediction", popdata_filtered$model_5[nlrow], "\n")
+    cat("Calib:", calib, "\n")
+    cat("new a:", new_a, "\n")
+  }
+  
+  i <- i + 1
+}
+
+
+```
+
+
+
+
+```{r}
+
+# Creating a new column in popdata2 with all NA values
+popdata2 <- popdata2 %>%
+  mutate(new_model_5 = NA)
+
+# Copying the values from popdata_filtered$model_5 to new_model_5 for corresponding 78 observations
+popdata2 <- popdata2 %>%
+                left_join(popdata_filtered %>% 
+                select(t, model_5), by = "t") %>%
+                mutate(new_model_5 = ifelse(!is.na(model_5.y), 
+                                            model_5.y, 
+                                            new_model_5)) %>%
+                select(-model_5.x, -model_5.y) %>%
+                round() %>% 
+                rename(model_5 = new_model_5)
+
+```
+
+
+
+```{r}
+### predicting Model 5 to 2100
+
+popdata2<-popdata2 %>% 
+            mutate(model_5=predict(model5, newdata = popdata2)) %>% 
+            mutate(model_5=round(model_2)) %>% 
+            mutate(model_5 = structure(model_5, 
+                                       label = "Model 5: Calibration of Modified Logistic Model"))
+```
+
+
+
+
+
+```{r}
+### adjusting the linear model to new prediction
+
+popdata2<-popdata2 %>% 
+                mutate(model_5=ifelse(!is.na(popdata2$model_3), 
+                                      popdata2$model_3, 
+                                      popdata2$model_5)) %>% 
+                mutate(model_5 = structure(model_5, 
+                                           label = "Model 5: Calibration of Modified Logistic Model"))
+
+```
+
+
+
+
+```{r}
+### Applying the moving average smoothing technique, 
+
+# Apply the moving average smoothing
+
+popdata2<-popdata2 %>% 
+            mutate(model_6=rollapply(popdata2$model_5, 
+                                     width = 3, 
+                                     FUN = mean, 
+                                     align = "center",
+                                     fill=NA)) %>% 
+            round() %>% 
+            mutate(model_6 = structure(model_6, 
+                                       label = "Model 6: Moving Average Smoothing"))
+
+```
+
+
+```{r}
+
+lrow<-tail(which(!is.na(popdata$washoe)),1)
+popdata2 <- popdata2 %>%
+                mutate(model_5 = ifelse(row_number() < lrow, NA, model_6)) %>% 
+                select(-model_6, -washoe2)
+
+```
+
+
+
+
+### Plotting the final projection
+
+The final projection is plotted in figure-4 where the black curve represents the original population to current year and a short 5 year linear projection. The red curve represents  the predicted population in regards to our data available. The blue curve shows the predictions made to the actual population curve by calibration and smoothing so that the model coincides with the current population before the prediction start.
+
+```{r}
+
+ggplot(data = popdata2, aes(x = year)) +
+  geom_line(aes(y = washoe, color="Actual"), 
+            linetype = "solid",
+            linewidth = 1) +
+  geom_line(aes(y = model_5,color="Model 2"), 
+            linetype = "solid", 
+            linewidth = 1) +
+  geom_line(aes(y = model_1, color="Model 1"), 
+            linetype = "solid", 
+            linewidth = 1) +
+  scale_x_continuous(breaks = seq(min(popdata2$year), 
+                                  max(popdata2$year), 
+                                  by = 25)) +
+  scale_y_continuous(limits = c(0, 750000),
+                     breaks = seq(0, 750000, by = 50000), 
+                     labels = function(x) x / 1000) +
+  labs(x = "Year", 
+       y = "Population (in thousands)", 
+       title = "Figure 4: Time Series Plot: Actual vs Predicted to 2100", 
+       color = "Legend") +
+  scale_color_manual(name = "Population", 
+                     values = c("black", "red","blue"),
+                     labels = c("Actual population", "Model 1: prediction using the actual population data","Final prediction after calibration and adjustment to 2027")) +
+  guides(linetype = guide_legend(title = "Line Type"),
+         linewidth = guide_legend(title = "Line Width")) +
+  theme(panel.background = element_rect(fill = "white"),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = c(1, 0.2),  
+        legend.justification = c(1, 0),
+        legend.box.just = "right",
+        plot.margin = margin(10, 10, 10, 50, "pt"))
+```
+
+
+```{r}
+### Exporting popdata2 file as csv 
+write_xlsx(popdata2, "popdata2.xlsx")
+
+```
+
+
+
+
+
+
+
+
+
+
